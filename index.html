@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Kuulapeli</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0e1a; --border: #1e3a5f; --accent: #00d4ff;
+    --accent2: #ff6b35; --gold: #ffd700; --text: #e0f0ff;
+  }
+  body {
+    background: var(--bg);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    min-height: 100vh; height: 100vh;
+    font-family: 'Orbitron', monospace;
+    color: var(--text); overflow: hidden;
+    touch-action: none; user-select: none;
+    perspective: 1000px; /* Alustetaan 3D-perspektiivi koko sivulle */
+  }
+  #ui {
+    position: fixed; top: 0; left: 0; right: 0;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 18px;
+    background: linear-gradient(180deg, rgba(0,0,0,0.9) 0%, transparent 100%);
+    z-index: 100; pointer-events: none;
+  }
+  #title { font-size: 0.9rem; font-weight: 900; letter-spacing: 0.2em; color: var(--accent); text-shadow: 0 0 20px var(--accent); }
+  #timer { font-family: 'Share Tech Mono', monospace; font-size: 1.2rem; color: var(--gold); text-shadow: 0 0 15px var(--gold); }
+  #level-badge { font-size: 0.7rem; letter-spacing: 0.1em; color: var(--accent2); }
+  
+  /* Ylävalikon painike joystickille */
+  .ui-btn {
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-family: 'Orbitron', monospace;
+    font-size: 0.65rem;
+    padding: 6px 12px;
+    cursor: pointer;
+    letter-spacing: 0.1em;
+    pointer-events: auto; /* Sallitaan klikkaukset vaikka #ui on pointer-events: none */
+    transition: all 0.2s;
+  }
+  .ui-btn:active {
+    background: rgba(0, 212, 255, 0.2);
+  }
+
+  canvas {
+    display: block;
+    border: 2px solid var(--border);
+    box-shadow: 0 0 40px rgba(0,212,255,0.15), 0 0 80px rgba(0,212,255,0.05);
+    border-radius: 4px;
+    transform-style: preserve-3d;
+    transition: transform 0.1s ease-out; /* Tasainen siirtymä pöydän kallistukselle */
+  }
+  #tilt-info {
+    position: fixed; bottom: 8px; left: 0; right: 0;
+    text-align: center;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.62rem; color: rgba(0,212,255,0.4);
+    pointer-events: none; z-index: 100;
+  }
+  .overlay {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    z-index: 200; padding: 28px;
+    background: rgba(5,10,20,0.93);
+    backdrop-filter: blur(8px);
+  }
+  .overlay h1 {
+    font-size: clamp(1.4rem, 5vw, 2.3rem); font-weight: 900;
+    letter-spacing: 0.15em; text-align: center; margin-bottom: 14px;
+  }
+  .overlay p {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: clamp(0.68rem, 2.4vw, 0.85rem);
+    text-align: center; color: rgba(224,240,255,0.7);
+    max-width: 320px; line-height: 1.6; margin-bottom: 8px;
+  }
+  .btn {
+    margin-top: 20px; padding: 13px 36px;
+    background: transparent; border: 2px solid var(--accent);
+    color: var(--accent); font-family: 'Orbitron', monospace;
+    font-size: 0.82rem; font-weight: 700;
+    letter-spacing: 0.18em; cursor: pointer;
+    text-transform: uppercase; transition: all 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn:active { transform: scale(0.96); background: rgba(0,212,255,0.1); }
+  #start-overlay h1 { color: var(--accent); text-shadow: 0 0 30px var(--accent); }
+  #win-overlay   h1 { color: var(--gold);   text-shadow: 0 0 30px var(--gold); }
+  #fail-overlay  h1 { color: var(--accent2);text-shadow: 0 0 30px var(--accent2); }
+  #win-overlay .score { font-family: 'Share Tech Mono', monospace; font-size: 1.8rem; color: var(--gold); text-shadow: 0 0 20px var(--gold); margin: 10px 0; }
+  .stars { font-size: 2.2rem; margin: 6px 0; }
+  #status-line { font-family:'Share Tech Mono',monospace; font-size:0.68rem; color:rgba(255,107,53,0.85); text-align:center; margin-top:8px; min-height:1.4em; }
+  body::after {
+    content:''; position:fixed; inset:0; pointer-events:none; z-index:400;
+    background: repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.025) 2px,rgba(0,0,0,0.025) 4px);
+  }
+
+  /* Joystick-elementit */
+  #joystick-zone {
+    position: fixed;
+    bottom: 30px;
+    right: 30px;
+    width: 110px;
+    height: 110px;
+    z-index: 150;
+    display: none; /* Näytetään vain kun joystickEnabled on päällä */
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto;
+  }
+  #joystick-base {
+    width: 90px;
+    height: 90px;
+    border: 2px solid var(--accent);
+    border-radius: 50%;
+    background: rgba(10, 14, 26, 0.6);
+    box-shadow: 0 0 15px rgba(0, 212, 255, 0.2);
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: none;
+  }
+  #joystick-stick {
+    width: 38px;
+    height: 38px;
+    background: radial-gradient(circle, var(--accent) 0%, #005f73 100%);
+    border-radius: 50%;
+    box-shadow: 0 0 12px var(--accent);
+    position: absolute;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <div id="title">LABYRINTTI</div>
+  <button id="joystick-toggle" class="ui-btn">JOYSTICK: POIS</button>
+  <div id="timer">00:00</div>
+  <div id="level-badge">LVL 1</div>
+</div>
+
+<canvas id="c"></canvas>
+<div id="tilt-info"></div>
+
+<!-- Joystick-kontrollit -->
+<div id="joystick-zone">
+  <div id="joystick-base">
+    <div id="joystick-stick"></div>
+  </div>
+</div>
+
+<div class="overlay" id="start-overlay">
+  <h1>KUULAPELI</h1>
+  <p>Kallistele puhelinta ohjaaksesi kuulaa sokkelossa.</p>
+  <p>Varo mustia reikiä! Löydä <span style="color:#00ff88">vihreä maali</span>.</p>
+  <div id="status-line"></div>
+  <button class="btn" id="start-btn">ALOITA PELI</button>
+</div>
+
+<div class="overlay" id="fail-overlay" style="display:none">
+  <h1>PUTOAA!</h1>
+  <p>Kuula putosi reikään.<br>Yritä uudelleen!</p>
+  <button class="btn" id="retry-btn">YRITÄ UUDELLEEN</button>
+</div>
+
+<div class="overlay" id="win-overlay" style="display:none">
+  <h1>MAALI!</h1>
+  <div class="stars" id="win-stars">⭐⭐⭐</div>
+  <p>Hienoa! Löysit maalin!</p>
+  <div class="score" id="win-time">00:00</div>
+  <p id="win-msg"></p>
+  <button class="btn" id="next-btn">UUSI SOKKELO</button>
+</div>
+
+<script>
+// ─── Canvas ───────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+
+function resize(){
+  const size = Math.min(window.innerWidth, window.innerHeight - 56);
+  canvas.width = canvas.height = Math.max(size, 200);
+}
+resize();
+window.addEventListener('resize', ()=>{ resize(); if(gameState==='playing') drawFrame(); });
+
+// ─── State ────────────────────────────────────────────────────────
+let gameState = 'start';
+let tiltX = 0, tiltY = 0;
+let startTime = 0, animId = null;
+let currentMaze = null, mazeLevel = 0;
+let ball = {x:0,y:0,vx:0,vy:0};
+let lastT = 0;
+let joystickEnabled = false; // Joystick-ohjauksen tila
+
+const GRAVITY = 0.28, FRICTION = 0.984;
+const BALL_R  = () => canvas.width * 0.028;
+const seeds   = [42,137,999,2048,31415,77777,12345,99991,54321,80085];
+
+// ─── Maze generation ──────────────────────────────────────────────
+function generateMaze(seed){
+  const COLS=9,ROWS=9;
+  let s=seed;
+  const rand=()=>{ s=(s*1664525+1013904223)&0xffffffff; return (s>>>0)/0xffffffff; };
+  const ri=(n)=>Math.floor(rand()*n);
+  const cells=[];
+  for(let r=0;r<ROWS;r++){
+    cells[r]=[];
+    for(let c=0;c<COLS;c++) cells[r][c]={N:true,S:true,E:true,W:true,hole:false,goal:false,visited:false};
+  }
+  const stack=[]; const sr=ri(ROWS),sc=ri(COLS);
+  cells[sr][sc].visited=true; stack.push({r:sr,c:sc});
+  const dirs=[{dr:-1,dc:0,wall:'N',opp:'S'},{dr:1,dc:0,wall:'S',opp:'N'},{dr:0,dc:1,wall:'E',opp:'W'},{dr:0,dc:-1,wall:'W',opp:'E'}];
+  while(stack.length){
+    const cur=stack[stack.length-1];
+    let nb=dirs.map(d=>({r:cur.r+d.dr,c:cur.c+d.dc,d})).filter(n=>n.r>=0&&n.r<ROWS&&n.c>=0&&n.c<COLS&&!cells[n.r][n.c].visited);
+    if(!nb.length){stack.pop();continue;}
+    for(let i=nb.length-1;i>0;i--){const j=ri(i+1);[nb[i],nb[j]]=[nb[j],nb[i]];}
+    const nx=nb[0];
+    cells[cur.r][cur.c][nx.d.wall]=false; cells[nx.r][nx.c][nx.d.opp]=false;
+    cells[nx.r][nx.c].visited=true; stack.push(nx);
+  }
+  let placed=0,attempts=0,holeCount=6+ri(5);
+  while(placed<holeCount&&attempts<300){
+    attempts++;
+    const r=ri(ROWS),c=ri(COLS);
+    if(!cells[r][c].hole&&!(r===0&&c===0)&&!(r===ROWS-1&&c===COLS-1)){cells[r][c].hole=true;placed++;}
+  }
+  cells[0][0].hole=false;
+  cells[ROWS-1][COLS-1].hole=false;
+  cells[ROWS-1][COLS-1].goal=true;
+  return {cells,COLS,ROWS};
+}
+
+const cs = ()=> canvas.width / (currentMaze ? currentMaze.COLS : 9);
+
+// ─── Drawing ──────────────────────────────────────────────────────
+const WALL_W=3;
+function drawMaze(){
+  const {cells,COLS,ROWS}=currentMaze;
+  const W=canvas.width,H=canvas.height,c2=cs();
+  const fg=ctx.createLinearGradient(0,0,W,H);
+  fg.addColorStop(0,'#0d1b2e'); fg.addColorStop(1,'#091422');
+  ctx.fillStyle=fg; ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='rgba(30,58,92,0.25)'; ctx.lineWidth=0.5;
+  for(let r=0;r<=ROWS;r++){ctx.beginPath();ctx.moveTo(0,r*c2);ctx.lineTo(W,r*c2);ctx.stroke();}
+  for(let c=0;c<=COLS;c++){ctx.beginPath();ctx.moveTo(c*c2,0);ctx.lineTo(c*c2,H);ctx.stroke();}
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){
+    const cell=cells[r][c],cx=c*c2+c2/2,cy=r*c2+c2/2;
+    if(cell.hole){
+      const hr=c2*0.28;
+      const sg=ctx.createRadialGradient(cx,cy+3,hr*0.1,cx,cy+2,hr*1.3);
+      sg.addColorStop(0,'rgba(0,0,0,0.6)'); sg.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle=sg; ctx.beginPath(); ctx.ellipse(cx,cy+4,hr,hr*0.45,0,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#000'; ctx.beginPath(); ctx.arc(cx,cy,hr,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle='rgba(0,20,40,0.9)'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(cx,cy,hr,0,Math.PI*2); ctx.stroke();
+    }
+    if(cell.goal){
+      const t=Date.now()/1000,p=0.65+0.35*Math.sin(t*4);
+      const gg=ctx.createRadialGradient(cx,cy,0,cx,cy,c2*0.5);
+      gg.addColorStop(0,`rgba(0,255,136,${0.4*p})`); gg.addColorStop(1,'rgba(0,255,136,0)');
+      ctx.fillStyle=gg; ctx.fillRect(c*c2,r*c2,c2,c2);
+      ctx.strokeStyle=`rgba(0,255,136,${0.85*p})`; ctx.lineWidth=2;
+      const s2=c2*0.26;
+      ctx.beginPath(); ctx.moveTo(cx-s2,cy); ctx.lineTo(cx+s2,cy);
+      ctx.moveTo(cx,cy-s2); ctx.lineTo(cx,cy+s2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx,cy,c2*0.32,0,Math.PI*2); ctx.stroke();
+    }
+  }
+  ctx.strokeStyle='rgba(0,0,0,0.55)'; ctx.lineWidth=WALL_W+3;
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){
+    const cell=cells[r][c],x=c*c2,y=r*c2;
+    if(cell.N&&r>0){ctx.beginPath();ctx.moveTo(x,y+2);ctx.lineTo(x+c2,y+2);ctx.stroke();}
+    if(cell.W&&c>0){ctx.beginPath();ctx.moveTo(x+2,y);ctx.lineTo(x+2,y+c2);ctx.stroke();}
+  }
+  ctx.lineWidth=WALL_W;
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){
+    const cell=cells[r][c],x=c*c2,y=r*c2;
+    const wg=ctx.createLinearGradient(x,y,x+c2,y+c2);
+    wg.addColorStop(0,'#2a5a8c'); wg.addColorStop(1,'#1a3a5c');
+    ctx.strokeStyle=wg;
+    if(cell.N){ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+c2,y);ctx.stroke();}
+    if(cell.S){ctx.beginPath();ctx.moveTo(x,y+c2);ctx.lineTo(x+c2,y+c2);ctx.stroke();}
+    if(cell.E){ctx.beginPath();ctx.moveTo(x+c2,y);ctx.lineTo(x+c2,y+c2);ctx.stroke();}
+    if(cell.W){ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x,y+c2);ctx.stroke();}
+  }
+  ctx.strokeStyle='#00d4ff'; ctx.lineWidth=3;
+  ctx.shadowColor='#00d4ff'; ctx.shadowBlur=10;
+  ctx.strokeRect(1,1,W-2,H-2); ctx.shadowBlur=0;
+}
+
+function drawBall(){
+  const r=BALL_R(),cx=ball.x,cy=ball.y;
+  const sg=ctx.createRadialGradient(cx+r*0.3,cy+r*0.4,r*0.05,cx+r*0.3,cy+r*0.4,r*1.2);
+  sg.addColorStop(0,'rgba(0,0,0,0.5)'); sg.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=sg; ctx.beginPath(); ctx.ellipse(cx+r*0.2,cy+r*0.5,r*1.1,r*0.5,0,0,Math.PI*2); ctx.fill();
+  const bg=ctx.createRadialGradient(cx-r*0.3,cy-r*0.3,r*0.05,cx,cy,r);
+  bg.addColorStop(0,'#ffffff'); bg.addColorStop(0.3,'#c8d8f8');
+  bg.addColorStop(0.7,'#8ab0e8'); bg.addColorStop(1,'#4070c0');
+  ctx.fillStyle=bg; ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.6)';
+  ctx.beginPath(); ctx.ellipse(cx-r*0.3,cy-r*0.3,r*0.2,r*0.13,-Math.PI/4,0,Math.PI*2); ctx.fill();
+}
+
+function drawFrame(){ ctx.clearRect(0,0,canvas.width,canvas.height); drawMaze(); drawBall(); }
+
+// ─── Physics ──────────────────────────────────────────────────────
+function getCell(x,y){ const c2=cs(); return {r:Math.floor(y/c2),c:Math.floor(x/c2)}; }
+
+function checkWalls(){
+  const c2=cs(),br=BALL_R(),{cells,COLS,ROWS}=currentMaze;
+  const {r,c}=getCell(ball.x,ball.y);
+  if(r<0||r>=ROWS||c<0||c>=COLS) return;
+  const cell=cells[r][c],cx=c*c2,cy=r*c2,wt=WALL_W/2+1;
+  if(ball.x-br<0)            {ball.x=br;              ball.vx= Math.abs(ball.vx)*0.5;}
+  if(ball.x+br>canvas.width) {ball.x=canvas.width-br; ball.vx=-Math.abs(ball.vx)*0.5;}
+  if(ball.y-br<0)             {ball.y=br;              ball.vy= Math.abs(ball.vy)*0.5;}
+  if(ball.y+br>canvas.height){ball.y=canvas.height-br;ball.vy=-Math.abs(ball.vy)*0.5;}
+  if(cell.N&&ball.y-br<cy+wt)    {ball.y=cy+wt+br;    ball.vy= Math.abs(ball.vy)*0.5;}
+  if(cell.S&&ball.y+br>cy+c2-wt) {ball.y=cy+c2-wt-br; ball.vy=-Math.abs(ball.vy)*0.5;}
+  if(cell.W&&ball.x-br<cx+wt)    {ball.x=cx+wt+br;    ball.vx= Math.abs(ball.vx)*0.5;}
+  if(cell.E&&ball.x+br>cx+c2-wt) {ball.x=cx+c2-wt-br; ball.vx=-Math.abs(ball.vx)*0.5;}
+}
+
+function checkHoleGoal(){
+  const c2=cs(),br=BALL_R(),{r,c}=getCell(ball.x,ball.y);
+  const {cells,ROWS,COLS}=currentMaze;
+  if(r<0||r>=ROWS||c<0||c>=COLS) return;
+  const cell=cells[r][c];
+  const cx=c*c2+c2/2,cy=r*c2+c2/2;
+  const dist=Math.hypot(ball.x-cx,ball.y-cy),hr=c2*0.28;
+  if(cell.hole&&dist<hr-br*0.4){ triggerFail(); return; }
+  if(cell.goal&&dist<hr)        { triggerWin(); }
+}
+
+// ─── Game loop ────────────────────────────────────────────────────
+function loop(t){
+  if(gameState!=='playing') return;
+  const dt=Math.min((t-lastT)/16.67,3); lastT=t;
+  ball.vx+=tiltX*GRAVITY*dt; ball.vy+=tiltY*GRAVITY*dt;
+  ball.vx*=Math.pow(FRICTION,dt); ball.vy*=Math.pow(FRICTION,dt);
+  const maxV=cs()*0.25,spd=Math.hypot(ball.vx,ball.vy);
+  if(spd>maxV){ball.vx=ball.vx/spd*maxV;ball.vy=ball.vy/spd*maxV;}
+  ball.x+=ball.vx*dt; ball.y+=ball.vy*dt;
+  checkWalls(); checkHoleGoal();
+  document.getElementById('timer').textContent=formatTime(Date.now()-startTime);
+  
+  // ─── 3D Pöydän Kallistusanimaatio ───
+  // Kallistetaan peliruutua dynaamisesti tiltX- ja tiltY-arvojen mukaan
+  const maxRotationAngle = 13; // Maksimikulma asteina
+  const rotX = tiltY * -maxRotationAngle;
+  const rotY = tiltX * maxRotationAngle;
+  canvas.style.transform = `perspective(800px) rotateX(${rotX}deg) rotateY(${rotY}deg)`;
+
+  drawFrame();
+  animId=requestAnimationFrame(loop);
+}
+
+function initGame(){
+  currentMaze=generateMaze(seeds[mazeLevel%seeds.length]+mazeLevel*1000);
+  const c2=cs();
+  ball={x:c2/2,y:c2/2,vx:0,vy:0};
+  startTime=Date.now();
+  document.getElementById('level-badge').textContent=`LVL ${mazeLevel+1}`;
+  gameState='playing'; lastT=performance.now();
+  tiltX=0; tiltY=0;
+  canvas.style.transform = 'perspective(800px) rotateX(0deg) rotateY(0deg)'; // Nollataan kallistus
+  if(animId) cancelAnimationFrame(animId);
+  animId=requestAnimationFrame(loop);
+}
+
+function formatTime(ms){ const s=Math.floor(ms/1000),m=Math.floor(s/60); return `${String(m).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`; }
+
+// ─── Transitions ──────────────────────────────────────────────────
+function triggerFail(){
+  gameState='fail'; cancelAnimationFrame(animId);
+  canvas.style.transition='filter 0.1s, transform 0.3s ease-out';
+  canvas.style.filter='brightness(3) saturate(0)';
+  canvas.style.transform='perspective(800px) rotateX(0deg) rotateY(0deg)'; // Nollataan asento suoraksi
+  setTimeout(()=>{ 
+    canvas.style.filter='';
+    canvas.style.transition='transform 0.1s ease-out'; // Palautetaan nopea vaste pelitilaan
+  },200);
+  document.getElementById('fail-overlay').style.display='flex';
+}
+function triggerWin(){
+  gameState='win'; cancelAnimationFrame(animId);
+  const el=Date.now()-startTime;
+  document.getElementById('win-time').textContent=formatTime(el);
+  const s=el/1000;
+  document.getElementById('win-stars').textContent=s<30?'⭐⭐⭐':s<60?'⭐⭐':'⭐';
+  const msgs=['Loistavaa työtä!','Mahtava suoritus!','Olet sokkelo-mestari!','Erinomainen!','Huikea läpäisy!'];
+  document.getElementById('win-msg').textContent=msgs[Math.floor(Math.random()*msgs.length)];
+  document.getElementById('win-overlay').style.display='flex';
+  canvas.style.transition='filter 0.1s, transform 0.3s ease-out';
+  canvas.style.filter='brightness(1.5) hue-rotate(90deg)';
+  canvas.style.transform='perspective(800px) rotateX(0deg) rotateY(0deg)'; // Nollataan asento suoraksi
+  setTimeout(()=>{ 
+    canvas.style.filter=''; 
+    canvas.style.transition='transform 0.1s ease-out'; // Palautetaan nopea vaste pelitilaan
+  },400);
+}
+
+// ─── Device orientation ───────────────────────────────────────────
+let orientationActive = false;
+let lastOrientationTs = 0;
+
+function onOrientationEvent(e){
+  if(joystickEnabled) return; // Ohitetaan jos joystick on aktiivinen
+  const now = Date.now();
+  if(now - lastOrientationTs < 8) return;
+  lastOrientationTs = now;
+
+  const g = (e.gamma !== null && e.gamma !== undefined) ? e.gamma : 0;
+  const b = (e.beta  !== null && e.beta  !== undefined) ? e.beta  : 0;
+  tiltX = Math.max(-1, Math.min(1, g / 40));
+  tiltY = Math.max(-1, Math.min(1, (b - 15) / 40));
+  orientationActive = true;
+  document.getElementById('tilt-info').textContent = `γ ${g.toFixed(1)}°  β ${b.toFixed(1)}°`;
+}
+
+function attachOrientationListeners(){
+  window.addEventListener('deviceorientationabsolute', onOrientationEvent, true);
+  window.addEventListener('deviceorientation',         onOrientationEvent, true);
+}
+
+async function setupOrientation(){
+  const el = document.getElementById('status-line');
+  if(typeof DeviceOrientationEvent !== 'undefined' &&
+     typeof DeviceOrientationEvent.requestPermission === 'function'){
+    try {
+      const res = await DeviceOrientationEvent.requestPermission();
+      if(res === 'granted'){
+        attachOrientationListeners();
+        el.textContent = '✓ Kallistus käytössä';
+      } else {
+        el.textContent = '⚠ Lupa evätty – käytä kosketusohjausta tai näppäimiä';
+      }
+    } catch(err){
+      el.textContent = '⚠ Virhe – käytä kosketusohjausta tai näppäimiä';
+    }
+  } else if(typeof DeviceOrientationEvent !== 'undefined'){
+    attachOrientationListeners();
+    setTimeout(()=>{
+      if(!orientationActive) el.textContent = 'Vedä sormella tai käytä näppäimiä';
+      else el.textContent = '✓ Kallistus käytössä';
+    }, 1500);
+    el.textContent = 'Odottaa kallistusta…';
+  } else {
+    el.textContent = 'Vedä sormella tai käytä näppäimiä (WASD/nuolet)';
+  }
+}
+
+// ─── Touch drag controls (fallback when no orientation) ───────────
+let touchOrigin = null;
+canvas.addEventListener('touchstart', e=>{
+  if(joystickEnabled) return;
+  e.preventDefault();
+  touchOrigin={x:e.touches[0].clientX, y:e.touches[0].clientY};
+},{passive:false});
+canvas.addEventListener('touchmove', e=>{
+  if(joystickEnabled) return;
+  e.preventDefault();
+  if(orientationActive||!touchOrigin) return;
+  const dx=e.touches[0].clientX-touchOrigin.x;
+  const dy=e.touches[0].clientY-touchOrigin.y;
+  const max=70;
+  tiltX=Math.max(-1,Math.min(1,dx/max));
+  tiltY=Math.max(-1,Math.min(1,dy/max));
+},{passive:false});
+canvas.addEventListener('touchend', e=>{
+  if(joystickEnabled) return;
+  e.preventDefault();
+  if(!orientationActive){tiltX*=0.4;tiltY*=0.4;}
+  touchOrigin=null;
+},{passive:false});
+
+// ─── Keyboard + mouse (desktop) ───────────────────────────────────
+const keys={};
+window.addEventListener('keydown',e=>{
+  keys[e.key]=true;
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+});
+window.addEventListener('keyup',e=>{ keys[e.key]=false; });
+canvas.addEventListener('mousemove',e=>{
+  if(gameState!=='playing'||orientationActive||joystickEnabled) return;
+  const rect=canvas.getBoundingClientRect();
+  tiltX=Math.max(-1,Math.min(1,(e.clientX-rect.left-canvas.width/2)/(canvas.width/2)));
+  tiltY=Math.max(-1,Math.min(1,(e.clientY-rect.top-canvas.height/2)/(canvas.height/2)));
+});
+canvas.addEventListener('mouseleave',()=>{ if(!orientationActive && !joystickEnabled){tiltX*=0.3;tiltY*=0.3;} });
+setInterval(()=>{
+  if(gameState!=='playing'||orientationActive||joystickEnabled) return;
+  let tx=0,ty=0;
+  if(keys['ArrowLeft'] ||keys['a']||keys['A']) tx=-1;
+  if(keys['ArrowRight']||keys['d']||keys['D']) tx= 1;
+  if(keys['ArrowUp']   ||keys['w']||keys['W']) ty=-1;
+  if(keys['ArrowDown'] ||keys['s']||keys['S']) ty= 1;
+  if(tx||ty){tiltX=tx;tiltY=ty;} else{tiltX*=0.8;tiltY*=0.8;}
+},16);
+
+// ─── Joystick Implementation ──────────────────────────────────────
+const joystickZone   = document.getElementById('joystick-zone');
+const joystickBase   = document.getElementById('joystick-base');
+const joystickStick  = document.getElementById('joystick-stick');
+const joystickToggle = document.getElementById('joystick-toggle');
+let isDraggingJoystick = false;
+
+// Joystick ON/OFF toggle-painikkeen logiikka
+joystickToggle.addEventListener('click', () => {
+  joystickEnabled = !joystickEnabled;
+  if(joystickEnabled) {
+    joystickZone.style.display = 'flex';
+    joystickToggle.textContent = 'JOYSTICK: PÄÄLLÄ';
+    joystickToggle.style.borderColor = 'var(--gold)';
+    joystickToggle.style.color = 'var(--gold)';
+    // Nollataan aiemmat ohjaukset
+    tiltX = 0; tiltY = 0;
+  } else {
+    joystickZone.style.display = 'none';
+    joystickToggle.textContent = 'JOYSTICK: POIS';
+    joystickToggle.style.borderColor = 'var(--accent)';
+    joystickToggle.style.color = 'var(--accent)';
+    tiltX = 0; tiltY = 0;
+    joystickStick.style.transform = 'translate(0px, 0px)';
+  }
+});
+
+function handleJoystickMove(clientX, clientY) {
+  if(!isDraggingJoystick) return;
+  const rect = joystickBase.getBoundingClientRect();
+  const centerX = rect.left + rect.width / 2;
+  const centerY = rect.top + rect.height / 2;
+  let dx = clientX - centerX;
+  let dy = clientY - centerY;
+  const maxRadius = rect.width / 2;
+  const dist = Math.hypot(dx, dy);
+
+  if (dist > maxRadius) {
+    dx = (dx / dist) * maxRadius;
+    dy = (dy / dist) * maxRadius;
+  }
+
+  joystickStick.style.transform = `translate(${dx}px, ${dy}px)`;
+
+  // Muutetaan ohjausvoimaksi välille -1 ... 1
+  tiltX = dx / maxRadius;
+  tiltY = dy / maxRadius;
+}
+
+// Pointer-tapahtumat tukevat sekä kosketusta että hiirtä saumattomasti
+joystickBase.addEventListener('pointerdown', e => {
+  isDraggingJoystick = true;
+  joystickBase.setPointerCapture(e.pointerId);
+  handleJoystickMove(e.clientX, e.clientY);
+});
+joystickBase.addEventListener('pointermove', e => {
+  if (isDraggingJoystick) {
+    handleJoystickMove(e.clientX, e.clientY);
+  }
+});
+const stopJoystickDrag = (e) => {
+  if (!isDraggingJoystick) return;
+  isDraggingJoystick = false;
+  joystickStick.style.transform = 'translate(0px, 0px)';
+  tiltX = 0;
+  tiltY = 0;
+};
+joystickBase.addEventListener('pointerup', stopJoystickDrag);
+joystickBase.addEventListener('pointercancel', stopJoystickDrag);
+
+// ─── Buttons ──────────────────────────────────────────────────────
+document.getElementById('start-btn').addEventListener('click', async ()=>{
+  await setupOrientation();
+  document.getElementById('start-overlay').style.display='none';
+  mazeLevel=0; initGame();
+});
+document.getElementById('retry-btn').addEventListener('click',()=>{
+  document.getElementById('fail-overlay').style.display='none';
+  initGame();
+});
+document.getElementById('next-btn').addEventListener('click',()=>{
+  document.getElementById('win-overlay').style.display='none';
+  mazeLevel++; initGame();
+});
+
+// ─── Preview ──────────────────────────────────────────────────────
+currentMaze=generateMaze(seeds[0]);
+ball={x:cs()/2,y:cs()/2,vx:0,vy:0};
+drawFrame();
+</script>
+</body>
+</html>
