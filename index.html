@@ -71,6 +71,8 @@
     z-index: 200; padding: 28px;
     background: rgba(5,10,20,0.93);
     backdrop-filter: blur(8px);
+    opacity: 1;
+    transition: opacity 0.4s ease;
   }
   .overlay h1 {
     font-size: clamp(1.4rem, 5vw, 2.3rem); font-weight: 900;
@@ -169,8 +171,8 @@
 
 <div class="overlay" id="fail-overlay" style="display:none">
   <h1>PUTOAA!</h1>
-  <p>Kuula putosi reikään.<br>Yritä uudelleen!</p>
-  <button class="btn" id="retry-btn">YRITÄ UUDELLEEN</button>
+  <p>Kuula putosi reikään.<br>Yritetään pian uudelleen...</p>
+  <button class="btn" id="retry-btn">YRITÄ HETI UUDELLEEN</button>
 </div>
 
 <div class="overlay" id="win-overlay" style="display:none">
@@ -199,9 +201,15 @@ let gameState = 'start';
 let tiltX = 0, tiltY = 0;
 let startTime = 0, animId = null;
 let currentMaze = null, mazeLevel = 0;
-let ball = {x:0,y:0,vx:0,vy:0};
+let ball = {x:0,y:0,vx:0,vy:0,scale:1};
 let lastT = 0;
 let joystickEnabled = false; // Joystick-ohjauksen tila
+
+// Animaatiomuuttujat putoamiselle ja heräämiselle
+let fallProgress = 0;
+let targetHole = {x:0, y:0};
+let spawnProgress = 0;
+let failTimeoutId = null;
 
 const GRAVITY = 0.28, FRICTION = 0.984;
 const BALL_R  = () => canvas.width * 0.028;
@@ -250,9 +258,10 @@ function drawMaze(){
   const {cells,COLS,ROWS}=currentMaze;
   const W=canvas.width,H=canvas.height,c2=cs();
   const fg=ctx.createLinearGradient(0,0,W,H);
-  fg.addColorStop(0,'#0d1b2e'); fg.addColorStop(1,'#091422');
+  // Taustaväriä vaalennettu jotta mustat reiät erottuvat paremmin
+  fg.addColorStop(0,'#2c3f58'); fg.addColorStop(1,'#1b2a3d');
   ctx.fillStyle=fg; ctx.fillRect(0,0,W,H);
-  ctx.strokeStyle='rgba(30,58,92,0.25)'; ctx.lineWidth=0.5;
+  ctx.strokeStyle='rgba(30,58,92,0.35)'; ctx.lineWidth=0.5;
   for(let r=0;r<=ROWS;r++){ctx.beginPath();ctx.moveTo(0,r*c2);ctx.lineTo(W,r*c2);ctx.stroke();}
   for(let c=0;c<=COLS;c++){ctx.beginPath();ctx.moveTo(c*c2,0);ctx.lineTo(c*c2,H);ctx.stroke();}
   for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){
@@ -301,14 +310,19 @@ function drawMaze(){
 }
 
 function drawBall(){
-  const r=BALL_R(),cx=ball.x,cy=ball.y;
+  const scale = ball.scale !== undefined ? ball.scale : 1;
+  if (scale <= 0) return;
+  const r=BALL_R() * scale, cx=ball.x, cy=ball.y;
+  
   const sg=ctx.createRadialGradient(cx+r*0.3,cy+r*0.4,r*0.05,cx+r*0.3,cy+r*0.4,r*1.2);
   sg.addColorStop(0,'rgba(0,0,0,0.5)'); sg.addColorStop(1,'rgba(0,0,0,0)');
   ctx.fillStyle=sg; ctx.beginPath(); ctx.ellipse(cx+r*0.2,cy+r*0.5,r*1.1,r*0.5,0,0,Math.PI*2); ctx.fill();
+  
   const bg=ctx.createRadialGradient(cx-r*0.3,cy-r*0.3,r*0.05,cx,cy,r);
   bg.addColorStop(0,'#ffffff'); bg.addColorStop(0.3,'#c8d8f8');
   bg.addColorStop(0.7,'#8ab0e8'); bg.addColorStop(1,'#4070c0');
   ctx.fillStyle=bg; ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill();
+  
   ctx.fillStyle='rgba(255,255,255,0.6)';
   ctx.beginPath(); ctx.ellipse(cx-r*0.3,cy-r*0.3,r*0.2,r*0.13,-Math.PI/4,0,Math.PI*2); ctx.fill();
 }
@@ -340,24 +354,54 @@ function checkHoleGoal(){
   const cell=cells[r][c];
   const cx=c*c2+c2/2,cy=r*c2+c2/2;
   const dist=Math.hypot(ball.x-cx,ball.y-cy),hr=c2*0.28;
-  if(cell.hole&&dist<hr-br*0.4){ triggerFail(); return; }
+  
+  if(cell.hole&&dist<hr-br*0.4){ 
+    // Aloitetaan putoamisanimaatio
+    gameState = 'falling';
+    fallProgress = 0;
+    targetHole = { x: cx, y: cy };
+    ball.vx = 0;
+    ball.vy = 0;
+    return; 
+  }
   if(cell.goal&&dist<hr)        { triggerWin(); }
 }
 
 // ─── Game loop ────────────────────────────────────────────────────
 function loop(t){
-  if(gameState!=='playing') return;
+  if(gameState!=='playing' && gameState!=='falling' && gameState!=='spawning') return;
   const dt=Math.min((t-lastT)/16.67,3); lastT=t;
-  ball.vx+=tiltX*GRAVITY*dt; ball.vy+=tiltY*GRAVITY*dt;
-  ball.vx*=Math.pow(FRICTION,dt); ball.vy*=Math.pow(FRICTION,dt);
-  const maxV=cs()*0.25,spd=Math.hypot(ball.vx,ball.vy);
-  if(spd>maxV){ball.vx=ball.vx/spd*maxV;ball.vy=ball.vy/spd*maxV;}
-  ball.x+=ball.vx*dt; ball.y+=ball.vy*dt;
-  checkWalls(); checkHoleGoal();
-  document.getElementById('timer').textContent=formatTime(Date.now()-startTime);
+  
+  if (gameState === 'playing') {
+    ball.vx+=tiltX*GRAVITY*dt; ball.vy+=tiltY*GRAVITY*dt;
+    ball.vx*=Math.pow(FRICTION,dt); ball.vy*=Math.pow(FRICTION,dt);
+    const maxV=cs()*0.25,spd=Math.hypot(ball.vx,ball.vy);
+    if(spd>maxV){ball.vx=ball.vx/spd*maxV;ball.vy=ball.vy/spd*maxV;}
+    ball.x+=ball.vx*dt; ball.y+=ball.vy*dt;
+    checkWalls(); checkHoleGoal();
+    document.getElementById('timer').textContent=formatTime(Date.now()-startTime);
+  } else if (gameState === 'falling') {
+    // Animoidaan kuula sujuvasti reiän keskipisteeseen ja kutistetaan se
+    fallProgress += 0.04 * dt;
+    ball.x += (targetHole.x - ball.x) * 0.15 * dt;
+    ball.y += (targetHole.y - ball.y) * 0.15 * dt;
+    ball.scale = Math.max(0, 1 - fallProgress);
+    if (fallProgress >= 1) {
+      ball.scale = 0;
+      triggerFail();
+    }
+  } else if (gameState === 'spawning') {
+    // Animoidaan uusi kuula aloituspaikkaan kasvattamalla sen kokoa
+    spawnProgress += 0.04 * dt;
+    ball.scale = Math.min(1, spawnProgress);
+    if (spawnProgress >= 1) {
+      ball.scale = 1;
+      gameState = 'playing';
+      startTime = Date.now(); // Nollataan kello uuteen yritykseen
+    }
+  }
   
   // ─── 3D Pöydän Kallistusanimaatio ───
-  // Kallistetaan peliruutua dynaamisesti tiltX- ja tiltY-arvojen mukaan
   const maxRotationAngle = 13; // Maksimikulma asteina
   const rotX = tiltY * -maxRotationAngle;
   const rotY = tiltX * maxRotationAngle;
@@ -370,7 +414,7 @@ function loop(t){
 function initGame(){
   currentMaze=generateMaze(seeds[mazeLevel%seeds.length]+mazeLevel*1000);
   const c2=cs();
-  ball={x:c2/2,y:c2/2,vx:0,vy:0};
+  ball={x:c2/2,y:c2/2,vx:0,vy:0,scale:1};
   startTime=Date.now();
   document.getElementById('level-badge').textContent=`LVL ${mazeLevel+1}`;
   gameState='playing'; lastT=performance.now();
@@ -390,10 +434,42 @@ function triggerFail(){
   canvas.style.transform='perspective(800px) rotateX(0deg) rotateY(0deg)'; // Nollataan asento suoraksi
   setTimeout(()=>{ 
     canvas.style.filter='';
-    canvas.style.transition='transform 0.1s ease-out'; // Palautetaan nopea vaste pelitilaan
+    canvas.style.transition='transform 0.1s ease-out'; // Palautetaan vaste
   },200);
-  document.getElementById('fail-overlay').style.display='flex';
+
+  const failOverlay = document.getElementById('fail-overlay');
+  failOverlay.style.opacity = '0';
+  failOverlay.style.display = 'flex';
+  failOverlay.offsetHeight; // Pakotetaan CSS-päivitys
+  failOverlay.style.opacity = '1';
+
+  if (failTimeoutId) clearTimeout(failTimeoutId);
+
+  // Pidetään ruutua esillä 3 sekuntia, häivytetään se ja aloitetaan automaattinen peli uudelleen
+  failTimeoutId = setTimeout(() => {
+    failOverlay.style.opacity = '0';
+    setTimeout(() => {
+      failOverlay.style.display = 'none';
+      if (gameState === 'fail') {
+        autoRetry();
+      }
+    }, 400); // Odotetaan häivytystransitiota
+  }, 3000);
 }
+
+function autoRetry() {
+  const c2 = cs();
+  ball = { x: c2/2, y: c2/2, vx: 0, vy: 0, scale: 0 };
+  spawnProgress = 0;
+  gameState = 'spawning';
+  startTime = Date.now();
+  lastT = performance.now();
+  tiltX = 0; tiltY = 0;
+  canvas.style.transform = 'perspective(800px) rotateX(0deg) rotateY(0deg)';
+  if (animId) cancelAnimationFrame(animId);
+  animId = requestAnimationFrame(loop);
+}
+
 function triggerWin(){
   gameState='win'; cancelAnimationFrame(animId);
   const el=Date.now()-startTime;
@@ -493,21 +569,50 @@ window.addEventListener('keydown',e=>{
   if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
 });
 window.addEventListener('keyup',e=>{ keys[e.key]=false; });
-canvas.addEventListener('mousemove',e=>{
-  if(gameState!=='playing'||orientationActive||joystickEnabled) return;
-  const rect=canvas.getBoundingClientRect();
-  tiltX=Math.max(-1,Math.min(1,(e.clientX-rect.left-canvas.width/2)/(canvas.width/2)));
-  tiltY=Math.max(-1,Math.min(1,(e.clientY-rect.top-canvas.height/2)/(canvas.height/2)));
+
+// Hiiriohjaus: Kallistus toimii aina hiiren vapaalla liikkeellä, kun joystick on päällä 
+// TAI kun käytetään tavallista työpöytä-ohjausta (ei kallistusta eikä joystickia)
+window.addEventListener('mousemove', e => {
+  if (gameState !== 'playing') return;
+  if (isDraggingJoystick) return; // Ohitetaan yleinen hiiriliike, kun joystickin nuppia vedetään
+
+  if (joystickEnabled || (!orientationActive && !joystickEnabled)) {
+    const rect = canvas.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const dx = e.clientX - centerX;
+    const dy = e.clientY - centerY;
+    const maxRange = rect.width / 2;
+    
+    tiltX = Math.max(-1, Math.min(1, dx / maxRange));
+    tiltY = Math.max(-1, Math.min(1, dy / maxRange));
+  }
 });
-canvas.addEventListener('mouseleave',()=>{ if(!orientationActive && !joystickEnabled){tiltX*=0.3;tiltY*=0.3;} });
+
+canvas.addEventListener('mouseleave',()=>{ 
+  if(!orientationActive){
+    tiltX*=0.3;
+    tiltY*=0.3;
+  } 
+});
+
+// Näppäinseuranta: Toimii aina taustalla pelin ollessa käynnissä
 setInterval(()=>{
-  if(gameState!=='playing'||orientationActive||joystickEnabled) return;
+  if(gameState!=='playing') return;
   let tx=0,ty=0;
   if(keys['ArrowLeft'] ||keys['a']||keys['A']) tx=-1;
   if(keys['ArrowRight']||keys['d']||keys['D']) tx= 1;
   if(keys['ArrowUp']   ||keys['w']||keys['W']) ty=-1;
   if(keys['ArrowDown'] ||keys['s']||keys['S']) ty= 1;
-  if(tx||ty){tiltX=tx;tiltY=ty;} else{tiltX*=0.8;tiltY*=0.8;}
+  if(tx||ty){
+    tiltX=tx;
+    tiltY=ty;
+  } else {
+    if(!orientationActive && !isDraggingJoystick) {
+      tiltX*=0.8;
+      tiltY*=0.8;
+    }
+  }
 },16);
 
 // ─── Joystick Implementation ──────────────────────────────────────
@@ -587,8 +692,13 @@ document.getElementById('start-btn').addEventListener('click', async ()=>{
   mazeLevel=0; initGame();
 });
 document.getElementById('retry-btn').addEventListener('click',()=>{
-  document.getElementById('fail-overlay').style.display='none';
-  initGame();
+  if (failTimeoutId) clearTimeout(failTimeoutId);
+  const failOverlay = document.getElementById('fail-overlay');
+  failOverlay.style.opacity = '0';
+  setTimeout(() => {
+    failOverlay.style.display='none';
+    initGame();
+  }, 400);
 });
 document.getElementById('next-btn').addEventListener('click',()=>{
   document.getElementById('win-overlay').style.display='none';
@@ -597,7 +707,7 @@ document.getElementById('next-btn').addEventListener('click',()=>{
 
 // ─── Preview ──────────────────────────────────────────────────────
 currentMaze=generateMaze(seeds[0]);
-ball={x:cs()/2,y:cs()/2,vx:0,vy:0};
+ball={x:cs()/2,y:cs()/2,vx:0,vy:0,scale:1};
 drawFrame();
 </script>
 </body>
