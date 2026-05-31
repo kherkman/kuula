@@ -210,10 +210,27 @@ let fallProgress = 0;
 let targetHole = {x:0, y:0};
 let spawnProgress = 0;
 let failTimeoutId = null;
+let winTimeoutId = null;
 
 const GRAVITY = 0.28, FRICTION = 0.984;
 const BALL_R  = () => canvas.width * 0.028;
 const seeds   = [42,137,999,2048,31415,77777,12345,99991,54321,80085];
+
+// ─── Väriteemat tasoille ──────────────────────────────────────────
+const levelThemes = [
+  { bgStart: '#2c3f58', bgEnd: '#1b2a3d', wallStart: '#2a5a8c', wallEnd: '#1a3a5c', border: '#00d4ff' }, // Sininen (Alkuperäinen)
+  { bgStart: '#422f58', bgEnd: '#251b3d', wallStart: '#572a8c', wallEnd: '#351a5c', border: '#d400ff' }, // Purppura
+  { bgStart: '#2c583f', bgEnd: '#1b3d2a', wallStart: '#2a8c51', wallEnd: '#1a5c34', border: '#00ff88' }, // Vihreä
+  { bgStart: '#582c2c', bgEnd: '#3d1b1b', wallStart: '#8c2a2a', wallEnd: '#5c1a1a', border: '#ff3b30' }, // Punainen
+  { bgStart: '#58452c', bgEnd: '#3d2f1b', wallStart: '#8c662a', wallEnd: '#5c431a', border: '#ffd700' }, // Kulta/Keltainen
+  { bgStart: '#2c5358', bgEnd: '#1b343d', wallStart: '#2a7e8c', wallEnd: '#1a525c', border: '#00f5ff' }, // Turkoosi
+  { bgStart: '#582c4b', bgEnd: '#3d1b33', wallStart: '#8c2a6d', wallEnd: '#5c1a47', border: '#ff00a0' }, // Magenta
+  { bgStart: '#4b582c', bgEnd: '#333d1b', wallStart: '#708c2a', wallEnd: '#495c1a', border: '#ccff00' }  // Lime/Neonvihreä
+];
+
+function getTheme() {
+  return levelThemes[mazeLevel % levelThemes.length];
+}
 
 // ─── Maze generation ──────────────────────────────────────────────
 function generateMaze(seed){
@@ -255,11 +272,12 @@ const cs = ()=> canvas.width / (currentMaze ? currentMaze.COLS : 9);
 // ─── Drawing ──────────────────────────────────────────────────────
 const WALL_W=3;
 function drawMaze(){
+  const theme = getTheme();
   const {cells,COLS,ROWS}=currentMaze;
   const W=canvas.width,H=canvas.height,c2=cs();
   const fg=ctx.createLinearGradient(0,0,W,H);
-  // Taustaväriä vaalennettu jotta mustat reiät erottuvat paremmin
-  fg.addColorStop(0,'#2c3f58'); fg.addColorStop(1,'#1b2a3d');
+  
+  fg.addColorStop(0, theme.bgStart); fg.addColorStop(1, theme.bgEnd);
   ctx.fillStyle=fg; ctx.fillRect(0,0,W,H);
   ctx.strokeStyle='rgba(30,58,92,0.35)'; ctx.lineWidth=0.5;
   for(let r=0;r<=ROWS;r++){ctx.beginPath();ctx.moveTo(0,r*c2);ctx.lineTo(W,r*c2);ctx.stroke();}
@@ -297,15 +315,15 @@ function drawMaze(){
   for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){
     const cell=cells[r][c],x=c*c2,y=r*c2;
     const wg=ctx.createLinearGradient(x,y,x+c2,y+c2);
-    wg.addColorStop(0,'#2a5a8c'); wg.addColorStop(1,'#1a3a5c');
+    wg.addColorStop(0, theme.wallStart); wg.addColorStop(1, theme.wallEnd);
     ctx.strokeStyle=wg;
     if(cell.N){ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+c2,y);ctx.stroke();}
     if(cell.S){ctx.beginPath();ctx.moveTo(x,y+c2);ctx.lineTo(x+c2,y+c2);ctx.stroke();}
     if(cell.E){ctx.beginPath();ctx.moveTo(x+c2,y);ctx.lineTo(x+c2,y+c2);ctx.stroke();}
     if(cell.W){ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x,y+c2);ctx.stroke();}
   }
-  ctx.strokeStyle='#00d4ff'; ctx.lineWidth=3;
-  ctx.shadowColor='#00d4ff'; ctx.shadowBlur=10;
+  ctx.strokeStyle=theme.border; ctx.lineWidth=3;
+  ctx.shadowColor=theme.border; ctx.shadowBlur=10;
   ctx.strokeRect(1,1,W-2,H-2); ctx.shadowBlur=0;
 }
 
@@ -412,6 +430,8 @@ function loop(t){
 }
 
 function initGame(){
+  if (winTimeoutId) clearTimeout(winTimeoutId);
+  if (failTimeoutId) clearTimeout(failTimeoutId);
   currentMaze=generateMaze(seeds[mazeLevel%seeds.length]+mazeLevel*1000);
   const c2=cs();
   ball={x:c2/2,y:c2/2,vx:0,vy:0,scale:1};
@@ -425,6 +445,22 @@ function initGame(){
 }
 
 function formatTime(ms){ const s=Math.floor(ms/1000),m=Math.floor(s/60); return `${String(m).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`; }
+
+// ─── Fullscreen helper ────────────────────────────────────────────
+async function requestFullscreen() {
+  try {
+    const docEl = document.documentElement;
+    if (docEl.requestFullscreen) {
+      await docEl.requestFullscreen();
+    } else if (docEl.webkitRequestFullscreen) { /* Safari / iOS */
+      await docEl.webkitRequestFullscreen();
+    } else if (docEl.msRequestFullscreen) { /* IE11 */
+      await docEl.msRequestFullscreen();
+    }
+  } catch (err) {
+    console.warn("Fullscreen request failed or was blocked:", err);
+  }
+}
 
 // ─── Transitions ──────────────────────────────────────────────────
 function triggerFail(){
@@ -478,7 +514,13 @@ function triggerWin(){
   document.getElementById('win-stars').textContent=s<30?'⭐⭐⭐':s<60?'⭐⭐':'⭐';
   const msgs=['Loistavaa työtä!','Mahtava suoritus!','Olet sokkelo-mestari!','Erinomainen!','Huikea läpäisy!'];
   document.getElementById('win-msg').textContent=msgs[Math.floor(Math.random()*msgs.length)];
-  document.getElementById('win-overlay').style.display='flex';
+  
+  const winOverlay = document.getElementById('win-overlay');
+  winOverlay.style.opacity = '0';
+  winOverlay.style.display = 'flex';
+  winOverlay.offsetHeight; // Pakotetaan CSS-päivitys
+  winOverlay.style.opacity = '1';
+
   canvas.style.transition='filter 0.1s, transform 0.3s ease-out';
   canvas.style.filter='brightness(1.5) hue-rotate(90deg)';
   canvas.style.transform='perspective(800px) rotateX(0deg) rotateY(0deg)'; // Nollataan asento suoraksi
@@ -486,6 +528,24 @@ function triggerWin(){
     canvas.style.filter=''; 
     canvas.style.transition='transform 0.1s ease-out'; // Palautetaan nopea vaste pelitilaan
   },400);
+
+  if (winTimeoutId) clearTimeout(winTimeoutId);
+
+  // Pidetään "MAALI!"-ikkunaa esillä 3 sekuntia, häivytetään se ja aloitetaan automaattisesti uusi sokkelo
+  winTimeoutId = setTimeout(() => {
+    winOverlay.style.opacity = '0';
+    setTimeout(() => {
+      winOverlay.style.display = 'none';
+      if (gameState === 'win') {
+        autoNext();
+      }
+    }, 400); // Odotetaan häivytystransitiota
+  }, 3000);
+}
+
+function autoNext() {
+  mazeLevel++;
+  initGame();
 }
 
 // ─── Device orientation ───────────────────────────────────────────
@@ -688,6 +748,7 @@ joystickBase.addEventListener('pointercancel', stopJoystickDrag);
 // ─── Buttons ──────────────────────────────────────────────────────
 document.getElementById('start-btn').addEventListener('click', async ()=>{
   await setupOrientation();
+  await requestFullscreen();
   document.getElementById('start-overlay').style.display='none';
   mazeLevel=0; initGame();
 });
@@ -701,8 +762,13 @@ document.getElementById('retry-btn').addEventListener('click',()=>{
   }, 400);
 });
 document.getElementById('next-btn').addEventListener('click',()=>{
-  document.getElementById('win-overlay').style.display='none';
-  mazeLevel++; initGame();
+  if (winTimeoutId) clearTimeout(winTimeoutId);
+  const winOverlay = document.getElementById('win-overlay');
+  winOverlay.style.opacity = '0';
+  setTimeout(() => {
+    winOverlay.style.display='none';
+    mazeLevel++; initGame();
+  }, 400);
 });
 
 // ─── Preview ──────────────────────────────────────────────────────
