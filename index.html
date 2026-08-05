@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>Kuulapeli</title>
+<!-- MediaPipe -kirjastot kasvojentunnistukseen CDN:n kautta -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap');
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -27,12 +30,13 @@
     padding: 10px 18px;
     background: linear-gradient(180deg, rgba(0,0,0,0.9) 0%, transparent 100%);
     z-index: 100; pointer-events: none;
+    gap: 8px; flex-wrap: wrap;
   }
   #title { font-size: 0.9rem; font-weight: 900; letter-spacing: 0.2em; color: var(--accent); text-shadow: 0 0 20px var(--accent); }
   #timer { font-family: 'Share Tech Mono', monospace; font-size: 1.2rem; color: var(--gold); text-shadow: 0 0 15px var(--gold); }
   #level-badge { font-size: 0.7rem; letter-spacing: 0.1em; color: var(--accent2); }
   
-  /* Ylävalikon painike joystickille */
+  /* Ylävalikon painikkeet */
   .ui-btn {
     background: transparent;
     border: 1px solid var(--accent);
@@ -147,9 +151,13 @@
 <div id="ui">
   <div id="title">LABYRINTTI</div>
   <button id="joystick-toggle" class="ui-btn">JOYSTICK: POIS</button>
+  <button id="face-toggle" class="ui-btn">FACE CONTROL: POIS</button>
   <div id="timer">00:00</div>
   <div id="level-badge">LVL 1</div>
 </div>
+
+<!-- Piilotettu video-elementti kameran syötettä varten -->
+<video id="face-video" style="display:none;" playsinline></video>
 
 <canvas id="c"></canvas>
 <div id="tilt-info"></div>
@@ -163,7 +171,7 @@
 
 <div class="overlay" id="start-overlay">
   <h1>KUULAPELI</h1>
-  <p>Kallistele puhelinta ohjaaksesi kuulaa sokkelossa.</p>
+  <p>Kallistele puhelinta tai liuta kasvojasi ohjaaksesi kuulaa sokkelossa.</p>
   <p>Varo mustia reikiä! Löydä <span style="color:#00ff88">vihreä maali</span>.</p>
   <div id="status-line"></div>
   <button class="btn" id="start-btn">ALOITA PELI</button>
@@ -204,6 +212,14 @@ let currentMaze = null, mazeLevel = 0;
 let ball = {x:0,y:0,vx:0,vy:0,scale:1};
 let lastT = 0;
 let joystickEnabled = false; // Joystick-ohjauksen tila
+let faceControlEnabled = false; // Naama-ohjauksen tila
+
+// MediaPipe & Kamera -muuttujat
+let faceMesh = null;
+let cameraUtil = null;
+let faceBaseX = 0.5;
+let faceBaseY = 0.5;
+let faceCalibrated = false;
 
 // Animaatiomuuttujat putoamiselle ja heräämiselle
 let fallProgress = 0;
@@ -553,7 +569,7 @@ let orientationActive = false;
 let lastOrientationTs = 0;
 
 function onOrientationEvent(e){
-  if(joystickEnabled) return; // Ohitetaan jos joystick on aktiivinen
+  if(joystickEnabled || faceControlEnabled) return; // Ohitetaan jos joystick tai face control on aktiivinen
   const now = Date.now();
   if(now - lastOrientationTs < 8) return;
   lastOrientationTs = now;
@@ -601,12 +617,12 @@ async function setupOrientation(){
 // ─── Touch drag controls (fallback when no orientation) ───────────
 let touchOrigin = null;
 canvas.addEventListener('touchstart', e=>{
-  if(joystickEnabled) return;
+  if(joystickEnabled || faceControlEnabled) return;
   e.preventDefault();
   touchOrigin={x:e.touches[0].clientX, y:e.touches[0].clientY};
 },{passive:false});
 canvas.addEventListener('touchmove', e=>{
-  if(joystickEnabled) return;
+  if(joystickEnabled || faceControlEnabled) return;
   e.preventDefault();
   if(orientationActive||!touchOrigin) return;
   const dx=e.touches[0].clientX-touchOrigin.x;
@@ -616,7 +632,7 @@ canvas.addEventListener('touchmove', e=>{
   tiltY=Math.max(-1,Math.min(1,dy/max));
 },{passive:false});
 canvas.addEventListener('touchend', e=>{
-  if(joystickEnabled) return;
+  if(joystickEnabled || faceControlEnabled) return;
   e.preventDefault();
   if(!orientationActive){tiltX*=0.4;tiltY*=0.4;}
   touchOrigin=null;
@@ -630,13 +646,14 @@ window.addEventListener('keydown',e=>{
 });
 window.addEventListener('keyup',e=>{ keys[e.key]=false; });
 
-// Hiiriohjaus: Kallistus toimii aina hiiren vapaalla liikkeellä, kun joystick on päällä 
-// TAI kun käytetään tavallista työpöytä-ohjausta (ei kallistusta eikä joystickia)
+// Hiiriohjaus: Kallistus toimii hiiren vapaalla liikkeellä, kun joystick tai kasvo-ohjaus ei ole päällä
 window.addEventListener('mousemove', e => {
   if (gameState !== 'playing') return;
-  if (isDraggingJoystick) return; // Ohitetaan yleinen hiiriliike, kun joystickin nuppia vedetään
+  if (isDraggingJoystick) return;
 
-  if (joystickEnabled || (!orientationActive && !joystickEnabled)) {
+  if (joystickEnabled || faceControlEnabled) return;
+
+  if (!orientationActive) {
     const rect = canvas.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
@@ -650,7 +667,7 @@ window.addEventListener('mousemove', e => {
 });
 
 canvas.addEventListener('mouseleave',()=>{ 
-  if(!orientationActive){
+  if(!orientationActive && !joystickEnabled && !faceControlEnabled){
     tiltX*=0.3;
     tiltY*=0.3;
   } 
@@ -668,7 +685,7 @@ setInterval(()=>{
     tiltX=tx;
     tiltY=ty;
   } else {
-    if(!orientationActive && !isDraggingJoystick) {
+    if(!orientationActive && !isDraggingJoystick && !faceControlEnabled) {
       tiltX*=0.8;
       tiltY*=0.8;
     }
@@ -684,13 +701,14 @@ let isDraggingJoystick = false;
 
 // Joystick ON/OFF toggle-painikkeen logiikka
 joystickToggle.addEventListener('click', () => {
+  if(faceControlEnabled) stopFaceControl(); // Suljetaan naamaohjaus jos se on päällä
+
   joystickEnabled = !joystickEnabled;
   if(joystickEnabled) {
     joystickZone.style.display = 'flex';
     joystickToggle.textContent = 'JOYSTICK: PÄÄLLÄ';
     joystickToggle.style.borderColor = 'var(--gold)';
     joystickToggle.style.color = 'var(--gold)';
-    // Nollataan aiemmat ohjaukset
     tiltX = 0; tiltY = 0;
   } else {
     joystickZone.style.display = 'none';
@@ -718,13 +736,10 @@ function handleJoystickMove(clientX, clientY) {
   }
 
   joystickStick.style.transform = `translate(${dx}px, ${dy}px)`;
-
-  // Muutetaan ohjausvoimaksi välille -1 ... 1
   tiltX = dx / maxRadius;
   tiltY = dy / maxRadius;
 }
 
-// Pointer-tapahtumat tukevat sekä kosketusta että hiirtä saumattomasti
 joystickBase.addEventListener('pointerdown', e => {
   isDraggingJoystick = true;
   joystickBase.setPointerCapture(e.pointerId);
@@ -744,6 +759,123 @@ const stopJoystickDrag = (e) => {
 };
 joystickBase.addEventListener('pointerup', stopJoystickDrag);
 joystickBase.addEventListener('pointercancel', stopJoystickDrag);
+
+// ─── Face Control (Kasvojentunnistus & Kameran käyttö) ───────────────
+const faceToggleBtn = document.getElementById('face-toggle');
+const faceVideo     = document.getElementById('face-video');
+
+faceToggleBtn.addEventListener('click', async () => {
+  if (!faceControlEnabled) {
+    await startFaceControl();
+  } else {
+    stopFaceControl();
+  }
+});
+
+async function startFaceControl() {
+  if (joystickEnabled) {
+    joystickZone.style.display = 'none';
+    joystickEnabled = false;
+    joystickToggle.textContent = 'JOYSTICK: POIS';
+    joystickToggle.style.borderColor = 'var(--accent)';
+    joystickToggle.style.color = 'var(--accent)';
+  }
+
+  faceToggleBtn.textContent = 'FACE CONTROL: LATAAT...';
+
+  try {
+    if (!faceMesh) {
+      faceMesh = new FaceMesh({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+      });
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: false,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+      faceMesh.onResults(onFaceResults);
+    }
+
+    if (!cameraUtil) {
+      cameraUtil = new Camera(faceVideo, {
+        onFrame: async () => {
+          if (faceControlEnabled && faceVideo.readyState >= 2) {
+            await faceMesh.send({ image: faceVideo });
+          }
+        },
+        width: 640,
+        height: 480
+      });
+    }
+
+    await cameraUtil.start();
+    faceControlEnabled = true;
+    faceCalibrated = false;
+
+    faceToggleBtn.textContent = 'FACE CONTROL: PÄÄLLÄ';
+    faceToggleBtn.style.borderColor = 'var(--gold)';
+    faceToggleBtn.style.color = 'var(--gold)';
+    tiltX = 0; tiltY = 0;
+  } catch (err) {
+    console.error('Kamera / Kasvojentunnistusvirhe:', err);
+    faceToggleBtn.textContent = 'FACE CONTROL: VIRHE';
+    setTimeout(() => {
+      faceToggleBtn.textContent = 'FACE CONTROL: POIS';
+      faceToggleBtn.style.borderColor = 'var(--accent)';
+      faceToggleBtn.style.color = 'var(--accent)';
+    }, 3000);
+    stopFaceControl();
+  }
+}
+
+function stopFaceControl() {
+  faceControlEnabled = false;
+  if (cameraUtil) {
+    try { cameraUtil.stop(); } catch(e){}
+  }
+  if (faceVideo.srcObject) {
+    faceVideo.srcObject.getTracks().forEach(track => track.stop());
+    faceVideo.srcObject = null;
+  }
+  faceToggleBtn.textContent = 'FACE CONTROL: POIS';
+  faceToggleBtn.style.borderColor = 'var(--accent)';
+  faceToggleBtn.style.color = 'var(--accent)';
+  tiltX = 0; tiltY = 0;
+  document.getElementById('tilt-info').textContent = '';
+}
+
+function onFaceResults(results) {
+  if (!faceControlEnabled) return;
+  if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+    const landmarks = results.multiFaceLandmarks[0];
+    const nose = landmarks[4]; // Nenänpään landmark (piste 4)
+    
+    // Peilataan X-akseli (1 - nose.x) luonnollista peilivaikutusta varten
+    const currentX = 1 - nose.x;
+    const currentY = nose.y;
+
+    // Kalibroidaan neutraali aloitusasento ensimmäisestä havaitusta naamasta
+    if (!faceCalibrated) {
+      faceBaseX = currentX;
+      faceBaseY = currentY;
+      faceCalibrated = true;
+    }
+
+    // Lasketaan poikkeama neutraaliin nähden
+    const dx = (currentX - faceBaseX) * 4.5;
+    const dy = (currentY - faceBaseY) * 4.5;
+
+    const targetX = Math.max(-1, Math.min(1, dx));
+    const targetY = Math.max(-1, Math.min(1, dy));
+
+    // Tasainen vaimennus (pehmeä seuranta)
+    tiltX += (targetX - tiltX) * 0.25;
+    tiltY += (targetY - tiltY) * 0.25;
+
+    document.getElementById('tilt-info').textContent = `NAAMA X: ${(tiltX*13).toFixed(1)}°  Y: ${(tiltY*13).toFixed(1)}°`;
+  }
+}
 
 // ─── Buttons ──────────────────────────────────────────────────────
 document.getElementById('start-btn').addEventListener('click', async ()=>{
